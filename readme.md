@@ -29,7 +29,7 @@ CoVACIEL est un projet développé dans le cadre de notre formation BTS Cybersé
 git clone https://github.com/XyasuroX/CoVACIEL
 
 # Accéder au dossier
-cd COVACHE
+cd CoVACIEL
 
 ---
 
