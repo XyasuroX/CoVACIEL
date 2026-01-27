@@ -28,7 +28,7 @@ void loop() {
   // 0 = Pleine vitesse arrière (ou frein)
   
 // --- PHASE MARCHE AVANT ---
-  escMoteur.write(98);   // Avance
+  escMoteur.write(100);   // Avance
   delay(2000);
   
   // --- PHASE FREINAGE ---

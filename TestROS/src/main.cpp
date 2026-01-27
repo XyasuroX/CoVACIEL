@@ -7,7 +7,7 @@ const int PIN_SERVO = 10;   // Vers le servomoteur de direction
 
 // --- Paramètres de réglage ---
 const int VITESSE_ARRET = 90;    // Point mort (souvent 90 ou 1500ms)
-const int VITESSE_AVANT = 105;   // Marche avant lente (ajuste selon tes tests)
+const int VITESSE_AVANT = 98;   // Marche avant lente (ajuste selon tes tests)
 const int DIRECTION_DROIT = 90;  // Roues bien droites
 
 // --- Variables de contrôle ---
@@ -32,29 +32,8 @@ void setup() {
 }
 
 void loop() {
-  // 1. Lecture des ordres envoyés par le Raspberry Pi
-  if (Serial.available() > 0) {
-    char commande = Serial.read();
-    tempsDernierMessage = millis(); // On remet le compteur de sécurité à zéro
-
-    if (commande == 'A') {
-      // ORDRE : AVANCER
-      moteurPropulsion.write(VITESSE_AVANT);
-      servoDirection.write(DIRECTION_DROIT);
-    } 
-    else if (commande == 'S') {
-      // ORDRE : STOP (Obstacle détecté par le LiDAR)
-      moteurPropulsion.write(VITESSE_ARRET);
-    }
-    else if (commande == 'D') {
-      // ORDRE : DROITE (Optionnel pour l'évitement)
-      servoDirection.write(120); 
-    }
-    else if (commande == 'G') {
-      // ORDRE : GAUCHE (Optionnel pour l'évitement)
-      servoDirection.write(60);
-    }
-  }
+  
+  
 
   // 2. Sécurité Failsafe (Essentiel !)
   // Si le LiDAR ou le Raspberry Pi s'arrête de parler, on stoppe tout
