@@ -4,72 +4,96 @@
 #include <Adafruit_BNO055.h>
 #include <U8g2lib.h>
 
-/* --- 1. CHANGEMENT CRITIQUE ICI --- */
-// On remplace _F_ (Full framebuffer) par _1_ (Page buffer) pour économiser la RAM de la UNO
-// Sinon la UNO plante car elle n'a que 2Ko de RAM.
+// Écran OLED SH1106 en mode Page Buffer (pour économiser la RAM de la UNO)
 U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+// BNO055
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 
-// Variables pour stocker les données
-float h, p, r; // Heading, Pitch, Roll
+// Variables globales
+float accelX, accelY, accelZ; // Accélération linéaire (m/s^2)
+float speedX = 0, speedY = 0; // Vitesse estimée (m/s)
+
+// Gestion du temps pour le calcul de vitesse
+unsigned long lastTime = 0;
 
 void setup() {
-  // 2. Initialisation Série (Vitesse 115200 pour RealTerm)
   Serial.begin(115200);
   
-  // Initialisation I2C et Ecran
   u8g2.begin();
   
-  Serial.println("Demarrage...");
-  
-  // Initialisation BNO055
   if (!bno.begin()) {
     Serial.println("Erreur BNO055");
     while (1);
   }
   
   bno.setExtCrystalUse(true);
+  lastTime = millis();
 }
 
 void loop() {
-  // --- LECTURE DES DONNEES ---
-  sensors_event_t event;
-  bno.getEvent(&event);
+  // 1. GESTION DU TEMPS (dt)
+  unsigned long now = millis();
+  double dt = (now - lastTime) / 1000.0; // Temps écoulé en secondes
+  lastTime = now;
+
+  // 2. LECTURE DES CAPTEURS
+  // On utilise VECTOR_LINEARACCEL pour ignorer la gravité terrestre
+  imu::Vector<3> linearAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
   
-  h = event.orientation.x;
-  p = event.orientation.y;
-  r = event.orientation.z;
+  accelX = linearAccel.x();
+  accelY = linearAccel.y();
+  accelZ = linearAccel.z();
 
-  // --- ENVOI VERS REALTERM (CSV) ---
-  // Format : Cap, Tangage, Roulis
-  Serial.print(h, 2); Serial.print(",");
-  Serial.print(p, 2); Serial.print(",");
-  Serial.println(r, 2);
+  // 3. CALCUL DE LA VITESSE (INTEGRATION)
+  // Zone morte (Deadzone) : si l'accélération est très faible (bruit), on considère que c'est 0
+  // Cela évite que la vitesse n'augmente toute seule quand le capteur est posé.
+  float deadzone = 0.15; 
 
-  // --- AFFICHAGE OLED (Mode Page Buffer) ---
-  // Cette boucle est OBLIGATOIRE avec le constructeur _1_
+  if (abs(accelX) > deadzone) {
+    speedX += accelX * dt;
+  } else {
+    // Optionnel : décommenter la ligne suivante pour remettre la vitesse à 0 si pas de mouvement
+    // speedX *= 0.95; // Effet de frottement virtuel pour arrêter la dérive
+  }
+
+  if (abs(accelY) > deadzone) {
+    speedY += accelY * dt;
+  } else {
+    // speedY *= 0.95; 
+  }
+
+  // 4. AFFICHAGE REALTERM (CSV)
+  // Format : AccelX, AccelY, VitesseX, VitesseY
+  Serial.print(accelX, 2); Serial.print(",");
+  Serial.print(accelY, 2); Serial.print(",");
+  Serial.print(speedX, 2); Serial.print(",");
+  Serial.println(speedY, 2);
+
+  // 5. AFFICHAGE OLED
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_6x10_tf);
     
-    // Titre
-    u8g2.drawStr(0, 10, "BNO055 - UNO");
+    // En-tête
+    u8g2.drawStr(0, 10, "IMU - Mouvement");
     u8g2.drawHLine(0, 12, 128);
 
-    // Affichage des valeurs ligne par ligne
-    // Note: sprintf %f ne marche pas bien sur UNO par défaut, on utilise print
+    // Colonne Gauche : Accélération
+    u8g2.drawStr(0, 25, "Acc (m/s2)");
+    u8g2.setCursor(0, 35); u8g2.print("X: "); u8g2.print(accelX, 1);
+    u8g2.setCursor(0, 45); u8g2.print("Y: "); u8g2.print(accelY, 1);
     
-    u8g2.setCursor(0, 25);
-    u8g2.print("Cap (X): "); u8g2.print(h, 1);
-    
-    u8g2.setCursor(0, 40);
-    u8g2.print("Tang(Y): "); u8g2.print(p, 1);
-    
-    u8g2.setCursor(0, 55);
-    u8g2.print("Roul(Z): "); u8g2.print(r, 1);
+    // Colonne Droite : Vitesse
+    u8g2.drawStr(70, 25, "Vit (m/s)");
+    u8g2.setCursor(70, 35); u8g2.print(speedX, 1);
+    u8g2.setCursor(70, 45); u8g2.print(speedY, 1);
+
+    // Note sur la dérive
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(0, 60, "Reset:Btn Reset");
 
   } while ( u8g2.nextPage() );
   
-  delay(50); // Petit délai
+  delay(20); // Mise à jour rapide (50Hz environ)
 }
