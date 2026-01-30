@@ -1,99 +1,199 @@
+/**
+ * PROJET : IMU ULTIME - Mouvement + Boussole + BUZZER
+ */
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <U8g2lib.h>
 
-// Écran OLED SH1106 en mode Page Buffer (pour économiser la RAM de la UNO)
-U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+// ================================================================
+// 1. REGLAGES
+// ================================================================
+// --- BUZZER ---
+#define BUZZER_PIN  A3      // <--- VERIFIE CETTE PIN SUR TA CARTE ! (Souvent 3, 8 ou 9)
+#define SHOCK_LIMIT 8.0    // Si l'accélération dépasse 8 m/s², ça sonne (Alarme de choc)
 
-// BNO055
+// --- PHYSIQUE ---
+#define DEADZONE    0.15   
+#define FRICTION    0.98   
+#define STOP_SPEED  0.05   
+
+// --- HARDWARE ---
+U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 
-// Variables globales
-float accelX, accelY, accelZ; // Accélération linéaire (m/s^2)
-float speedX = 0, speedY = 0; // Vitesse estimée (m/s)
+// ================================================================
+// 2. VARIABLES
+// ================================================================
+float accelX, accelY, accelZ;
+float speedX = 0, speedY = 0, speedZ = 0;
+float totalAccel = 0, totalSpeed = 0;
+float offsetX = 0, offsetY = 0, offsetZ = 0; 
 
-// Gestion du temps pour le calcul de vitesse
+// Orientation
+float startHeading = 0, startRoll = 0, startPitch = 0;
+float relHeading = 0, relRoll = 0, relPitch = 0;
+
 unsigned long lastTime = 0;
 
+// ================================================================
+// 3. FONCTIONS UTILITAIRES
+// ================================================================
+
+// Fonction pour faire Bip (Fréquence en Hz, Durée en ms)
+// Le Sonitron SMAT-13 répond bien entre 2000Hz et 4000Hz
+void bip(int frequence, int duree) {
+  tone(BUZZER_PIN, frequence, duree);
+  // Pas de delay ici pour ne pas bloquer le processeur
+}
+
+float getAngle0to360(float current, float start) {
+  float delta = current - start;
+  while (delta < 0) delta += 360;
+  while (delta >= 360) delta -= 360;
+  return delta;
+}
+
+float getAngleSigned(float current, float start) {
+  float delta = current - start;
+  if (delta < -180) delta += 360;
+  if (delta > 180) delta -= 360;
+  return delta;
+}
+
+// ================================================================
+// 4. SETUP
+// ================================================================
 void setup() {
   Serial.begin(115200);
   
+  // Config du Buzzer
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  // Petit bip de démarrage (2 coups)
+  bip(2000, 100); delay(150);
+  bip(2500, 100);
+
   u8g2.begin();
   
-  if (!bno.begin()) {
-    Serial.println("Erreur BNO055");
-    while (1);
-  }
-  
-  bno.setExtCrystalUse(true);
-  lastTime = millis();
-}
-
-void loop() {
-  // 1. GESTION DU TEMPS (dt)
-  unsigned long now = millis();
-  double dt = (now - lastTime) / 1000.0; // Temps écoulé en secondes
-  lastTime = now;
-
-  // 2. LECTURE DES CAPTEURS
-  // On utilise VECTOR_LINEARACCEL pour ignorer la gravité terrestre
-  imu::Vector<3> linearAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
-  
-  accelX = linearAccel.x();
-  accelY = linearAccel.y();
-  accelZ = linearAccel.z();
-
-  // 3. CALCUL DE LA VITESSE (INTEGRATION)
-  // Zone morte (Deadzone) : si l'accélération est très faible (bruit), on considère que c'est 0
-  // Cela évite que la vitesse n'augmente toute seule quand le capteur est posé.
-  float deadzone = 0.15; 
-
-  if (abs(accelX) > deadzone) {
-    speedX += accelX * dt;
-  } else {
-    // Optionnel : décommenter la ligne suivante pour remettre la vitesse à 0 si pas de mouvement
-    // speedX *= 0.95; // Effet de frottement virtuel pour arrêter la dérive
-  }
-
-  if (abs(accelY) > deadzone) {
-    speedY += accelY * dt;
-  } else {
-    // speedY *= 0.95; 
-  }
-
-  // 4. AFFICHAGE REALTERM (CSV)
-  // Format : AccelX, AccelY, VitesseX, VitesseY
-  Serial.print(accelX, 2); Serial.print(",");
-  Serial.print(accelY, 2); Serial.print(",");
-  Serial.print(speedX, 2); Serial.print(",");
-  Serial.println(speedY, 2);
-
-  // 5. AFFICHAGE OLED
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_6x10_tf);
-    
+    u8g2.drawStr(10, 30, "Calibration...");
+    u8g2.drawStr(10, 45, "NE PAS BOUGER !");
+  } while (u8g2.nextPage());
+
+  if (!bno.begin()) {
+    // Si erreur capteur : Bip grave et continu
+    while (1) {
+      bip(500, 1000); 
+      delay(1000);
+    }
+  }
+  bno.setExtCrystalUse(true);
+
+  // -- 1. TARE ACCEL --
+  Serial.println("Tare Accel...");
+  float sumX = 0, sumY = 0, sumZ = 0;
+  for(int i=0; i<100; i++) {
+    imu::Vector<3> vec = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    sumX += vec.x(); sumY += vec.y(); sumZ += vec.z();
+    delay(10); 
+  }
+  offsetX = sumX/100; offsetY = sumY/100; offsetZ = sumZ/100;
+
+  // -- 2. TARE ANGLES --
+  Serial.println("Tare Angles...");
+  imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  startHeading = euler.x();
+  startRoll    = euler.y();
+  startPitch   = euler.z();
+  
+  // Bip de fin de calibration (Aigu !)
+  bip(3000, 200);
+  lastTime = millis();
+}
+
+// ================================================================
+// 5. LOOP
+// ================================================================
+void loop() {
+  unsigned long now = millis();
+  double dt = (now - lastTime) / 1000.0;
+  lastTime = now;
+
+  // --- CALCUL PHYSIQUE ---
+  imu::Vector<3> linAcc = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+  accelX = linAcc.x() - offsetX;
+  accelY = linAcc.y() - offsetY;
+  accelZ = linAcc.z() - offsetZ; 
+
+  auto updateSpeed = [&](float &v, float a) {
+    if (abs(a) > DEADZONE) v += a * dt;
+    else { v *= FRICTION; if (abs(v) < STOP_SPEED) v = 0; }
+  };
+  updateSpeed(speedX, accelX);
+  updateSpeed(speedY, accelY);
+  updateSpeed(speedZ, accelZ);
+
+  totalAccel = sqrt(sq(accelX) + sq(accelY) + sq(accelZ));
+  totalSpeed = sqrt(sq(speedX) + sq(speedY) + sq(speedZ));
+
+  // --- FONCTIONNALITÉ BUZZER : ALARME DE CHOC ---
+  // Si on secoue trop fort, ça bip !
+  if (totalAccel > SHOCK_LIMIT) {
+    // Son d'alarme (Fréquence, durée)
+    bip(4000, 50); 
+  }
+
+  // --- CALCUL ANGLES ---
+  imu::Vector<3> orient = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  relHeading = getAngle0to360(orient.x(), startHeading); 
+  relRoll    = getAngleSigned(orient.y(), startRoll);    
+  relPitch   = getAngleSigned(orient.z(), startPitch);   
+
+  // --- SERIAL ---
+  Serial.print("Cap:"); Serial.print(relHeading, 0); 
+  Serial.print("\tAccT:"); Serial.println(totalAccel, 2);
+
+  // --- OLED ---
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x10_tf);
+
     // En-tête
-    u8g2.drawStr(0, 10, "IMU - Mouvement");
-    u8g2.drawHLine(0, 12, 128);
+    u8g2.drawStr(2, 9, "Cap:"); 
+    u8g2.setCursor(28, 9); u8g2.print(relHeading, 0); u8g2.print("\260"); 
+    u8g2.drawStr(80, 9, "VIT");
 
-    // Colonne Gauche : Accélération
-    u8g2.drawStr(0, 25, "Acc (m/s2)");
-    u8g2.setCursor(0, 35); u8g2.print("X: "); u8g2.print(accelX, 1);
-    u8g2.setCursor(0, 45); u8g2.print("Y: "); u8g2.print(accelY, 1);
-    
-    // Colonne Droite : Vitesse
-    u8g2.drawStr(70, 25, "Vit (m/s)");
-    u8g2.setCursor(70, 35); u8g2.print(speedX, 1);
-    u8g2.setCursor(70, 45); u8g2.print(speedY, 1);
+    u8g2.drawHLine(0, 12, 128);       
+    u8g2.drawVLine(64, 0, 64);        
+    u8g2.drawHLine(0, 52, 128);       
 
-    // Note sur la dérive
-    u8g2.setFont(u8g2_font_5x7_tr);
-    u8g2.drawStr(0, 60, "Reset:Btn Reset");
+    // Corps
+    int lineX = 24, lineY = 36, lineZ = 48;
+    int colLeft = 20, colRight = 85;
+
+    u8g2.drawStr(2, lineX, "X"); 
+    u8g2.setCursor(colLeft, lineX); u8g2.print(accelX, 1);
+    u8g2.setCursor(colRight, lineX); u8g2.print(speedX, 1);
+
+    u8g2.drawStr(2, lineY, "Y"); 
+    u8g2.setCursor(colLeft, lineY); u8g2.print(accelY, 1);
+    u8g2.setCursor(colRight, lineY); u8g2.print(speedY, 1);
+
+    u8g2.drawStr(2, lineZ, "Z"); 
+    u8g2.setCursor(colLeft, lineZ); u8g2.print(accelZ, 1);
+    u8g2.setCursor(colRight, lineZ); u8g2.print(speedZ, 1);
+
+    // Total
+    u8g2.drawStr(2, 63, "T"); 
+    u8g2.setCursor(colLeft, 63); u8g2.print(totalAccel, 1);
+    u8g2.setCursor(colRight, 63); u8g2.print(totalSpeed, 1);
 
   } while ( u8g2.nextPage() );
   
-  delay(20); // Mise à jour rapide (50Hz environ)
+  delay(20);
 }
