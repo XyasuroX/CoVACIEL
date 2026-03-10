@@ -1,0 +1,31 @@
+#include <Arduino.h>
+#include <Wire.h>
+
+void receiveEvent(int howMany) {
+  while (Wire.available()) {
+    char c = Wire.read();
+    Serial.print(c);
+  }
+}
+
+void setup() {
+  Serial.begin(9600); 
+  
+  // --- LA LIGNE MAGIQUE ---
+  // On bloque le programme ici TANT QUE le moniteur série du PC n'est pas ouvert
+  while (!Serial) {
+    delay(10); // On attend
+  }
+  
+  // Petite pause supplémentaire d'une seconde pour que l'affichage soit propre
+  delay(1000); 
+
+  Wire.begin(0x08); 
+  Wire.onReceive(receiveEvent); 
+  
+  Serial.println("\n=== ARDUINO I2C PRET (Adresse 0x08) ===");
+}
+
+void loop() {
+  delay(100); 
+}

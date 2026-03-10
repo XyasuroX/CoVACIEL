@@ -1,0 +1,89 @@
+#include <iostream>
+#include <string>
+#include <fcntl.h>
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <linux/i2c-dev.h>
+#include <cstring>
+
+using namespace std;
+
+// --- INITIALISATION DU REcepteur RADIO (XBEE) ---
+int initialiser_xbee(const char* nom_port) {
+    int fd = open(nom_port, O_RDWR | O_NOCTTY);
+    if (fd < 0) return -1;
+    struct termios tty;
+    tcgetattr(fd, &tty);
+    cfsetospeed(&tty, B9600);
+    cfsetispeed(&tty, B9600);
+    tty.c_cflag |= (CS8 | CREAD | CLOCAL);
+    tty.c_lflag |= ICANON; // Mode bloquant pour economiser le CPU
+    tcsetattr(fd, TCSANOW, &tty);
+    return fd;
+}
+
+// --- INITIALISATION DE L'ÉMETTEUR I2C (VERS ARDUINO) ---
+int initialiser_i2c(int adresse) {
+    int fd = open("/dev/i2c-1", O_RDWR);
+    if (fd < 0) return -1;
+    if (ioctl(fd, I2C_SLAVE, adresse) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+int main() {
+    cout << "=== PILOTE AUTO COMPLET (XBEE + I2C) ===" << endl;
+
+    // 1. Ouvrir le port XBee
+    int xbee_fd = initialiser_xbee("/dev/ttyUSB0");
+    if (xbee_fd < 0) {
+        cerr << "[ERREUR] XBee introuvable sur /dev/ttyUSB0" << endl;
+        return 1;
+    }
+
+    // 2. Ouvrir le port I2C vers l'Arduino
+    int i2c_fd = initialiser_i2c(0x08);
+    if (i2c_fd < 0) {
+        cerr << "[ERREUR] Arduino introuvable a l'adresse I2C 0x08" << endl;
+        return 1;
+    }
+
+    cout << "[OK] Connexions etablies. En attente des ordres du PC..." << endl;
+    char buffer[256];
+
+    while (true) {
+        memset(buffer, '\0', sizeof(buffer));
+        // Le Pi s'endort ici jusqu'à recevoir un message radio
+        int bytes_lus = read(xbee_fd, buffer, sizeof(buffer) - 1);
+        
+        if (bytes_lus > 0) {
+            string message(buffer);
+            message.erase(message.find_last_not_of(" \n\r\t") + 1); // Nettoyage
+            
+            if (message.empty()) continue;
+            cout << "\n> PC (via XBee) dit : " << message << endl;
+
+            // --- TRADUCTION ET ENVOI A L'ARDUINO ---
+            if (message == "START") {
+                string ordre = "<SYS:START>\n";
+                write(i2c_fd, ordre.c_str(), ordre.length());
+                cout << "   -> Ordre I2C envoye : " << ordre;
+            } 
+            else if (message == "STOP") {
+                string ordre = "<SYS:STOP>\n";
+                write(i2c_fd, ordre.c_str(), ordre.length());
+                cout << "   -> Ordre I2C envoye : " << ordre;
+            }
+            else {
+                cout << "   -> Commande ignoree." << endl;
+            }
+        }
+    }
+
+    close(xbee_fd);
+    close(i2c_fd);
+    return 0;
+}

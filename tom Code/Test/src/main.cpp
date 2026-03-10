@@ -49,4 +49,3 @@ void loop() {
   delay(1000);            // On attend que l'ESC valide l'arrêt avant de repartir
 }
 
-
