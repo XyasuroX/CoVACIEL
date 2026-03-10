@@ -54,6 +54,7 @@ float relHeading = 0, relRoll = 0, relPitch = 0;
 
 // Temps
 unsigned long lastTime = 0;
+unsigned long lastSerialTime = 0;
 
 // Moteur
 unsigned long motorTimer = 0;
@@ -100,6 +101,7 @@ void setup() {
   Wire.setClock(100000); 
 
   Serial.begin(115200);
+  Serial1.begin(115200);
 
   // --- B. INIT PERIPHERIQUES SIMPLES ---
   escMoteur.attach(PIN_ESC);
@@ -108,7 +110,7 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   bip(1000, 50); // Petit bip de vie
 
-  u8g2.begin();
+  u8g2.begin(); // Initialiser l'écran OLED
   analogReadResolution(12); // Mode 12 bits pour le Nano R4
 
   // --- C. INIT BNO055 (ROBUSTE) ---
@@ -253,6 +255,9 @@ void loop() {
     u8g2.print(batteryVoltage, 1); 
     u8g2.print("V");
 
+    // Courant
+    
+
     // -- CORPS (COLONNES) --
     u8g2.drawStr(15, 20, "ACC");
     u8g2.drawStr(75, 20, "VIT");
@@ -316,4 +321,27 @@ void loop() {
       if (elapsed >= 1000) { motorStep = 0; motorTimer = now; }
       break;
   }
+
+  // Envoie des données vers raspberry pi
+  // On envoie les données toutes les 200 ms (sans bloqué le code)
+  if (now - lastSerialTime >= 200) 
+    lastSerialTime = now;
+    
+    // Contruction du message en JSON avec les données
+    String json = "{";
+    json += "\"cap\":" + String(relHeading, 1) + ",";
+    json += "\"bat\":" + String(batteryVoltage, 2) + ",";
+    json += "\"accX\":" + String(accelX, 2) + ",";
+    json += "\"accY\":" + String(accelY, 2) + ",";
+    json += "\"accZ\":" + String(accelZ, 2) + ",";
+    json += "\"vitX\":" + String(speedX, 2) + ",";
+    json += "\"vitY\":" + String(speedY, 2) + ",";
+    json += "\"vitZ\":" + String(speedZ, 2) + ",";
+    json += "\"accTot\":" + String(totalAccel, 2) + ",";
+    json += "\"vitTot\":" + String(totalSpeed, 2);
+    json += "}";
+
+    // Envoie du message vers le raspberry
+    Serial1.println(json);
+  
 }
